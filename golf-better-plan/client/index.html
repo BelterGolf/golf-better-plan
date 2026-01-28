@@ -1,0 +1,96 @@
+
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Golf Better Plan — Google Maps</title>
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    .panel { position: absolute; top: 10px; left: 10px; background:#fff; padding: 10px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.2); z-index: 2; width: 340px; }
+    .list { max-height: 65vh; overflow:auto; }
+    .btn { background:#1a73e8; color:#fff; border:none; padding:8px 12px; border-radius:6px; cursor:pointer; }
+    .item { border-bottom: 1px solid #eee; padding: 8px 0; }
+    .badge { display:inline-block; padding:2px 6px; border-radius:4px; background:#f1f3f4; margin-right:6px; font-size:12px; }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <div style="font-weight:700; margin-bottom:8px;">Golf Better Plan</div>
+    <div style="margin-bottom:8px">Origin: <input id="origin" size="34" placeholder="e.g., Edmonton, AB"/></div>
+    <div style="margin-bottom:8px">Minutes: <input id="minutes" type="number" value="60" min="5" max="60"/></div>
+    <button class="btn" id="go">Show courses</button>
+    <div class="list" id="list"></div>
+  </div>
+  <div id="map"></div>
+
+  <script>
+    let map, originMarker, polygonPath;
+
+    async function initMap(){
+      map = new google.maps.Map(document.getElementById('map'), {
+        center: {lat: 53.5444, lng: -113.4909},
+        zoom: 9
+      });
+
+      document.getElementById('go').onclick = run;
+    }
+
+    async function run(){
+      const originText = document.getElementById('origin').value || 'Edmonton, AB';
+      const minutes = Number(document.getElementById('minutes').value || 60);
+
+      const geocoder = new google.maps.Geocoder();
+      const geo = await geocoder.geocode({ address: originText });
+      if (!geo.results || !geo.results[0]) { alert('Origin not found'); return; }
+      const loc = geo.results[0].geometry.location;
+      const origin = { lat: loc.lat(), lng: loc.lng() };
+
+      map.setCenter(origin);
+      if (!originMarker) originMarker = new google.maps.Marker({ position: origin, map });
+      else originMarker.setPosition(origin);
+
+      const iso = await fetch(`http://localhost:4000/api/isochrone?lat=${origin.lat}&lng=${origin.lng}&minutes=${minutes}`).then(r=>r.json());
+      const geom = iso.features[0].geometry;
+
+      if (polygonPath) polygonPath.setMap(null);
+      polygonPath = new google.maps.Polygon({
+        paths: geom.coordinates[0].map(([lng,lat]) => ({lat, lng})),
+        strokeColor: '#1a73e8', strokeOpacity: 0.8, strokeWeight: 2,
+        fillColor: '#1a73e8', fillOpacity: 0.15,
+        map
+      });
+
+      const courses = await fetch('http://localhost:4000/api/courses', {
+        method: 'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ lat: origin.lat, lng: origin.lng, polygon: geom })
+      }).then(r=>r.json());
+
+      const list = document.getElementById('list');
+      list.innerHTML = '';
+
+      (courses.results || []).forEach(c => {
+        const m = new google.maps.Marker({ position: {lat: c.location.latitude, lng: c.location.longitude}, map, title: c.name });
+        const iw = new google.maps.InfoWindow({ content: `<div><strong>${c.name}</strong><br/>${c.address||''}<br/>Rating: ${c.rating||'—'} (${c.userRatingsTotal||0})<br/>`+
+          `<a target="_blank" href="https://www.google.com/maps/dir/?api=1&destination=${c.location.latitude},${c.location.longitude}">Directions</a></div>` });
+        m.addListener('click', ()=> iw.open({ anchor: m, map }));
+
+        const div = document.createElement('div');
+        div.className = 'item';
+        div.innerHTML = `
+          <div><strong>${c.name}</strong></div>
+          <div>${c.address||''}</div>
+          <div class="badge">Google ⭐ ${c.rating||'—'} (${c.userRatingsTotal||0})</div>
+          <div>
+            <a target="_blank" href="${c.reviewLinks.golfpass}">GolfPass reviews</a> ·
+            <a target="_blank" href="${c.reviewLinks.top100}">Top100Courses</a> ·
+            <a target="_blank" href="${c.reviewLinks.golfdigest}">Golf Digest</a>
+          </div>
+        `;
+        list.appendChild(div);
+      });
+    }
+  </script>
+  <script async defer src="https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_MAPS_JS_API_KEY&callback=initMap"></script>
+</body>
+</html>
